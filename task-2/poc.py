@@ -17,12 +17,12 @@ logging.basicConfig(
   level=logging.DEBUG)
 
 MAX_ITER = 100
-N = 9
+N = 999
 T = 1
 
 beta = 0.1
 delta = 10e-5
-tau = 0.01
+tau = 0.0001
 h = 1 / N
 
 total_time_steps = int(T / tau)
@@ -36,23 +36,31 @@ x = np.linspace(0, 1, N + 1)
 u = np.zeros((int(T / tau), N + 1), dtype=complex)
 
 # some initial condition
-u[0, :] = np.cos(2 * np.pi * x) + 1j * np.sin(2 * np.pi * x)
+phi = np.pi/4                 # constant phase
+u[0] = np.cos(2*np.pi*x) * np.exp(1j * phi)
+
+def laplacian_neumann(u):
+  left  = np.empty_like(u)
+  right = np.empty_like(u)
+
+  left[1:]  = u[:-1]
+  right[:-1] = u[1:]
+
+  # ghost points (Neumann: derivative zero -> mirror the neighbour)
+  left[0]   = u[1]     # u_{-1} := u_1  => left neighbour for index 0 is u1
+  right[-1] = u[-2]    # u_{N+1} := u_{N-1} => right neighbour for last index is u_{N-1}
+
+  return left - 2*u + right
 
 # coefficient matrix (diags)
 def create_coef_mat():
-  # upper = -0.5 * tau * 1j * (h ** -2) * np.ones(N)
-  # main = 1 + tau * 1j * (h ** -2) * np.ones(N + 1)
-  # lower = -0.5 * tau * 1j * (h ** -2) * np.ones(N)
-  
-  # ab = np.zeros((3, N + 1), dtype=complex)   # shape = (l+u+1, N)
-  # ab[0,1:] = upper        # upper diag (1 above main)
-  # ab[1,:]  = main         # main diag
-  # ab[2,:-1]= lower        # lower diag (1 below main)
-  
   upper = np.ones(N)
-  main = -2 * (1 - 1j * h**2) * np.ones(N + 1)
+  main = 2 * (1j / tau * h**2 - 1) * np.ones(N + 1)
   lower = np.ones(N)
   
+  main[ 0] = (2j / tau * h**2 - 1)
+  main[-1] = (2j / tau * h**2 - 1)
+
   ab = np.zeros((3, N + 1), dtype=complex)
   ab[0,1:] = upper
   ab[1,:] = main
@@ -75,20 +83,20 @@ for n in range(total_time_steps - 1):
   for iter in range(MAX_ITER):
     
     # previous step from time derivative approximation
-    A = 2j * (h**2) * u[n]
+    A = 2j * (h**2) / tau * u[n] 
     
     # diffusion part, previous time step solutions
-    B = - tau * (np.roll(u[n], 1) - 2 * u[n] + np.roll(u[n], -1))
-     
+    B = -laplacian_neumann(u[n])
+
     # non linear first order part
-    C = 2j * (h**2) * beta * tau * (
+    C = 1j * h * beta * (
       np.abs(0.5 * (np.roll(u_old,-1) + np.roll(u[n],-1)))**2 * 0.5 * (np.roll(u_old,-1) + np.roll(u[n],-1)) -
       np.abs(0.5 * (np.roll(u_old, 1) + np.roll(u[n], 1)))**2 * 0.5 * (np.roll(u_old, 1) + np.roll(u[n], 1))
     )
     # function part
-    D = 1j * tau * (h**2) * (f(x, tau * n) + f(x, tau * (n + 1)))
+    D = 1j * (h**2) * (f(x, tau * n) + f(x, tau * (n + 1)))
     
-    rhs = u[n] + A + B + C + D
+    rhs = A + B + C + D
     
     nan_vals_id = np.where(np.isnan(rhs))
     inf_vals_id = np.where(np.isinf(rhs))
@@ -129,16 +137,9 @@ np.save("solution.npy", u)
 # %%
 
 # Plot solution quantity over time
-
-# %%
-#u = np.load("solution.npy")
-step = 3
+# u = np.load("solution.npy")
+step = 1
 plt.plot(x, u[step].real, label="Re(u)")
 plt.plot(x, u[step].imag, label="Im(u)")
 plt.legend()
 plt.show()
-    
-    
-
-  
-  
