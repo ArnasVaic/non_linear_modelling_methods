@@ -28,11 +28,11 @@ h = 1 / N
 total_time_steps = int(T / tau)
 
 def f(x, t):
-  return 0
+  return 25 * np.exp(25j * x)
 
 x = np.linspace(0, 1, N + 1)
 
-# [T, N], first
+# [T, N + 1], first
 u = np.zeros((int(T / tau), N + 1), dtype=complex)
 
 # some initial condition
@@ -43,7 +43,7 @@ def laplacian_neumann(u):
   left  = np.empty_like(u)
   right = np.empty_like(u)
 
-  left[1:]  = u[:-1]
+  left[1:] = u[:-1]
   right[:-1] = u[1:]
 
   # ghost points (Neumann: derivative zero -> mirror the neighbour)
@@ -141,7 +141,7 @@ np.save("solution.npy", u)
 
 print(u.shape)
 
-step = 1000
+step = 125  
 plt.plot(x, u[step].real, label="Re(u)")
 plt.plot(x, u[step].imag, label="Im(u)")
 plt.legend()
@@ -158,14 +158,16 @@ from PIL import Image
 from tqdm import tqdm
 
 # Parameters
-n_frames = 1000
-fps = 60
+n_frames = 125
+fps = 30
 out_file = "plot_video.mp4"
 
 # Create a VideoWriter
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec
 frame_size = (640, 480)
 video = cv2.VideoWriter(out_file, fourcc, fps, frame_size)
+
+u = u[::8, :]
 
 # Generate frames
 for i in tqdm(range(n_frames)):
