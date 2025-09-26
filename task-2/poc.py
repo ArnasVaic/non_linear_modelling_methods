@@ -138,8 +138,60 @@ np.save("solution.npy", u)
 
 # Plot solution quantity over time
 # u = np.load("solution.npy")
-step = 1
+
+print(u.shape)
+
+step = 1000
 plt.plot(x, u[step].real, label="Re(u)")
 plt.plot(x, u[step].imag, label="Im(u)")
 plt.legend()
 plt.show()
+
+
+# %% Render video
+
+import numpy as np
+import matplotlib.pyplot as plt
+import cv2
+from io import BytesIO
+from PIL import Image
+from tqdm import tqdm
+
+# Parameters
+n_frames = 1000
+fps = 60
+out_file = "plot_video.mp4"
+
+# Create a VideoWriter
+fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec
+frame_size = (640, 480)
+video = cv2.VideoWriter(out_file, fourcc, fps, frame_size)
+
+# Generate frames
+for i in tqdm(range(n_frames)):
+    
+    # Plot
+    fig, ax = plt.subplots(figsize=(6.4, 4.8))  # size matches 640x480
+    
+    ax.plot(x, u[i].real, label="Re(u)")
+    ax.plot(x, u[i].imag, label="Im(u)")
+    
+    ax.set_ylim(-1, 1)
+    
+    # Save plot to a buffer
+    buf = BytesIO()
+    plt.savefig(buf, format="png")
+    plt.close(fig)
+    
+    # Convert buffer to image
+    buf.seek(0)
+    img = Image.open(buf).convert("RGB")
+    img = img.resize(frame_size)  # Ensure correct size
+    frame = np.array(img)[:, :, ::-1]  # Convert RGB → BGR for OpenCV
+    
+    # Write frame
+    video.write(frame)
+
+# Release video
+video.release()
+print(f"Video saved as {out_file}")
