@@ -151,6 +151,13 @@ int main( int argc, char **argv )
                 total_points
             );
 
+            if (info != 0) {
+                // Early exit
+                file_logger->error("LAPACKE_zgtsv failed, info = {0}", info);
+                stop_simulation = true;
+                break;
+            }
+
             // Reinitialize tridiagonal containers (ChatGPT says they might be overwriten...)
             sub_diagonal.assign(sub_diagonal_backup.begin(), sub_diagonal_backup.end());
             super_diagonal.assign(super_diagonal_backup.begin(), super_diagonal_backup.end());
@@ -161,15 +168,6 @@ int main( int argc, char **argv )
             // enforce boundary conditions, no way this is the reason it diverges...
             u_new[0] = u_new[1];
             u_new[total_points - 1] = u_new[total_points - 2];
-
-            if (info != 0) {
-                file_logger->error("LAPACKE_zgtsv failed, info = {0}", info);
-
-                // Early exit
-                completed_steps = step + 1;
-                stop_simulation = true;
-                break;
-            }
 
             double max_norm = 0.0;
             for (int i = 0; i < total_points; ++i)
@@ -202,6 +200,8 @@ int main( int argc, char **argv )
         );
         copy(u_new.begin(), u_new.end(), u_next.begin());
 
+        completed_steps = step + 1;
+
         if (stop_simulation)
         {
             break;
@@ -209,7 +209,7 @@ int main( int argc, char **argv )
     }
 
     span<complex<double>> u_writable_history(
-        u_history.begin() + (completed_steps - 1) * total_points,
+        u_history.begin(),
         u_history.begin() + completed_steps * total_points
     );
 
