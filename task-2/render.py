@@ -15,7 +15,7 @@ tau = 0.0001
 total_time_steps = int(T / tau)
 
 # Read binary file as complex128 (same layout as std::complex<double>)
-u = np.fromfile("bin/data.bin", dtype=np.complex128)
+u = np.fromfile("data.bin", dtype=np.complex128)
 
 if u.size % total_points == total_time_steps:
     u = np.reshape(u, (total_time_steps, total_points))

@@ -17,4 +17,4 @@ mpic++ \
     -I extern/spdlog/include \
     -Wl,-rpath,${OPENBLAS_DIR}/lib
 
-mpirun ./main
+mpirun ./build/main

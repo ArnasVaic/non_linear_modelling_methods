@@ -26,7 +26,7 @@ complex<double> f(double x, double t)
 int main( int argc, char **argv )
 {
     // Create a logger without throwing
-    auto file_logger = spdlog::basic_logger_mt("file_logger", "log.txt");
+    auto file_logger = spdlog::basic_logger_mt("file_logger", "build/log.txt");
     
     if (!file_logger) {
         std::cerr << "Failed to create file logger!" << std::endl;
@@ -102,7 +102,7 @@ int main( int argc, char **argv )
         u[i] = A * exp(-pow(x - x0, 2)/(2 * sigma * sigma)) * exp(1i * 5.0 * numbers::pi * x); // gauss wavepacket simple
     }
 
-    const string output_filename = "data.bin";
+    const string output_filename = "build/data.bin";
     ofstream os(output_filename, ios::binary);
 
     os.write(
