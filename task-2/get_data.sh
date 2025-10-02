@@ -1,0 +1,1 @@
+scp hpc:/scratch/lustre/home/arva8345/non_linear_modelling_methods/task-2/build/data.bin .

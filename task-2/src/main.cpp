@@ -113,7 +113,7 @@ int main( int argc, char **argv )
     auto start = std::chrono::high_resolution_clock::now();
 
     // when step is t, we are calculating solution at t + 1
-    for (int step = 0; step < total_time_steps; ++step)
+    for (int step = 0; step < total_time_steps - 1; ++step)
     {
         const int time_step_offset = step * total_points;
 
