@@ -4,7 +4,6 @@
 #include <numbers>
 #include <chrono>
 #include <span>
-#include <mpi.h>
 #include <omp.h>
 #include <fstream>
 #include <cblas.h>
@@ -45,7 +44,7 @@ int main( int argc, char **argv )
     constexpr double beta = 10.0;
     constexpr double delta = 1e-5;
     
-    constexpr int N = 9999;
+    constexpr int N = 999;
     constexpr int total_points = N + 1;
     constexpr double h = 1 / static_cast<double>(N);
     constexpr double h2 = h * h;
@@ -64,9 +63,9 @@ int main( int argc, char **argv )
 
     // manual stop flag
     bool stop_simulation = false;
-    int completed_steps = 0;
 
-    vector<complex<double>> u_history(total_time_steps * total_points);       
+    // last time step solution
+    vector<complex<double>> u(total_points);       
     // Incremental approximation storage
     vector<complex<double>> u_old(total_points), u_new(total_points);
 
@@ -94,14 +93,22 @@ int main( int argc, char **argv )
     {
         const double x = static_cast<double>(i) / N;
         // Time step is zero, fill from start
-        // u_history[i] = cos(2.0 * numbers::pi * x) * exp(1i * numbers::pi / 4.0); // somethind idk
-        // u_history[i] = cos(4.0 * numbers::pi * x); // linear
+        // u[i] = cos(2.0 * numbers::pi * x) * exp(1i * numbers::pi / 4.0); // somethind idk
+        // u[i] = cos(4.0 * numbers::pi * x); // linear
 
         const double A = 0.1;
         const double x0 = 0.5;
         const double sigma = 0.01;
-        u_history[i] = A * exp(-pow(x - x0, 2)/(2 * sigma * sigma)) * exp(1i * 5.0 * numbers::pi * x); // gauss wavepacket simple
+        u[i] = A * exp(-pow(x - x0, 2)/(2 * sigma * sigma)) * exp(1i * 5.0 * numbers::pi * x); // gauss wavepacket simple
     }
+
+    const string output_filename = "data.bin";
+    ofstream os(output_filename, ios::binary);
+
+    os.write(
+        reinterpret_cast<const char*>(u.data()), 
+        u.size() * sizeof(complex<double>)
+    );
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -109,12 +116,6 @@ int main( int argc, char **argv )
     for (int step = 0; step < total_time_steps; ++step)
     {
         const int time_step_offset = step * total_points;
-
-        // View of last time step solution
-        span<const complex<double>> u(
-            u_history.begin() + time_step_offset, 
-            u_history.begin() + time_step_offset + total_points
-        );
 
         u_old.assign(u.begin(), u.end());
 
@@ -206,40 +207,26 @@ int main( int argc, char **argv )
             }
 
             u_old.assign(u_new.begin(), u_new.end());
+            
         }
 
-        // View of the solution at the next step
-        const int next_time_step_offset = total_points * (step + 1);
-        span<complex<double>> u_next(
-            u_history.begin() + next_time_step_offset, 
-            u_history.begin() + next_time_step_offset + total_points
-        );
-        copy(u_new.begin(), u_new.end(), u_next.begin());
+        u.assign(u_new.begin(), u_new.end());
 
-        completed_steps = step + 1;
+        os.write(
+            reinterpret_cast<const char*>(u_new.data()), 
+            u_new.size() * sizeof(complex<double>)
+        );
+
+        if (step % 100 == 0) file_logger->flush();
 
         if (stop_simulation)
         {
             break;
         }
     }
-
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
-
     file_logger->info("Solve time (seconds): {0}", elapsed.count());
-
-    span<complex<double>> u_writable_history(
-        u_history.begin(),
-        u_history.begin() + completed_steps * total_points
-    );
-
-    const string output_filename = "data.bin";
-    ofstream os(output_filename, ios::binary);
-    os.write(
-        reinterpret_cast<const char*>(u_writable_history.data()), 
-        u_writable_history.size() * sizeof(complex<double>)
-    );
-
     file_logger->info("Results written to {0}", output_filename);
+    os.close();
 }
