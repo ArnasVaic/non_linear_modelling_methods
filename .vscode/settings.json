@@ -69,5 +69,6 @@
     "expected": "cpp",
     "regex": "cpp",
     "source_location": "cpp"
-}
+},
+"cmake.sourceDirectory": "/home/arnas/projects/masters/non_linear_modelling_methods/task-2"
 }

@@ -28,24 +28,24 @@ x = np.linspace(0, 1, total_points)
 
 # %% Test, render single frame
 
-step = 18
+step = 0
 plt.plot(x, u[step].real, label="Re(u)")
 plt.plot(x, u[step].imag, label="Im(u)")
 
 # %% render video
 # Parameters
-max_frames = 1000
-stride = 8
-n_frames = min(u.shape[0], 1000) // stride
+max_frames = 250
+stride = 1
+n_frames = min(u.shape[0], max_frames) // stride
 fps = 30
-out_file = "solution.mp4"
+out_file = "gauss_wavepacket_03.mp4"
 
 # Create a VideoWriter
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec
 frame_size = (640, 480)
 video = cv2.VideoWriter(out_file, fourcc, fps, frame_size)
 
-u = u[::stride, :]
+u_strided = u[::stride, :]
 
 # Generate frames
 for i in tqdm(range(n_frames)):
@@ -53,10 +53,11 @@ for i in tqdm(range(n_frames)):
     # Plot
     fig, ax = plt.subplots(figsize=(6.4, 4.8))  # size matches 640x480
     
-    ax.plot(x, u[i].real, label="Re(u)")
-    ax.plot(x, u[i].imag, label="Im(u)")
+    ax.set_title('$u(x, 0) = A\\exp\\left(-\\frac{(x - x_0)^2}{2\\sigma^2}\\right)e^{ix}, f(x, t) = 0, \\beta = 1$')
+    ax.plot(x, u_strided[i].real, label="Re(u)")
+    ax.plot(x, u_strided[i].imag, label="Im(u)")
     
-    ax.set_ylim(-1, 1)
+    ax.set_ylim(-1.2, 1.2)
     
     # Save plot to a buffer
     buf = BytesIO()
@@ -75,3 +76,7 @@ for i in tqdm(range(n_frames)):
 # Release video
 video.release()
 print(f"Video saved as {out_file}")
+
+# %% Image
+
+plt.imshow(np.abs(u[:250, :]))

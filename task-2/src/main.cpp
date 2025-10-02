@@ -2,9 +2,12 @@
 #include <complex>
 #include <vector>
 #include <numbers>
+#include <chrono>
 #include <span>
 #include <mpi.h>
+#include <omp.h>
 #include <fstream>
+#include <cblas.h>
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/basic_file_sink.h"
 
@@ -17,7 +20,8 @@ using namespace std::complex_literals;
 
 complex<double> f(double x, double t)
 {
-    return 25.0 * exp(25i * x);
+    // return 25.0 * exp(25i * x);
+    return 0.0;
 }
 
 int main( int argc, char **argv )
@@ -31,14 +35,17 @@ int main( int argc, char **argv )
         file_logger->info("Logger initialized successfully");
     }
 
-    file_logger->set_level(spdlog::level::debug);
+    file_logger->set_level(spdlog::level::info);
+
+    openblas_set_num_threads(omp_get_max_threads());
+    file_logger->info("OpenBLAS threads set to {}", omp_get_max_threads());
 
     // Constants
     constexpr int max_iterations = 100;
-    constexpr double beta = 0.1;
+    constexpr double beta = 10.0;
     constexpr double delta = 1e-5;
     
-    constexpr int N = 999;
+    constexpr int N = 9999;
     constexpr int total_points = N + 1;
     constexpr double h = 1 / static_cast<double>(N);
     constexpr double h2 = h * h;
@@ -87,8 +94,16 @@ int main( int argc, char **argv )
     {
         const double x = static_cast<double>(i) / N;
         // Time step is zero, fill from start
-        u_history[i] = cos(2.0 * numbers::pi * x) * exp(1i * numbers::pi / 4.0);
+        // u_history[i] = cos(2.0 * numbers::pi * x) * exp(1i * numbers::pi / 4.0); // somethind idk
+        // u_history[i] = cos(4.0 * numbers::pi * x); // linear
+
+        const double A = 0.1;
+        const double x0 = 0.5;
+        const double sigma = 0.01;
+        u_history[i] = A * exp(-pow(x - x0, 2)/(2 * sigma * sigma)) * exp(1i * 5.0 * numbers::pi * x); // gauss wavepacket simple
     }
+
+    auto start = std::chrono::high_resolution_clock::now();
 
     // when step is t, we are calculating solution at t + 1
     for (int step = 0; step < total_time_steps; ++step)
@@ -106,6 +121,7 @@ int main( int argc, char **argv )
         for (int iter = 0; iter < max_iterations; ++iter)
         {
             // Recalculate RHS vector
+            #pragma omp parallel for
             for (int i = 0; i < total_points; ++i)
             {
                 // Index for laplacian with neumann boundary conditions
@@ -207,6 +223,11 @@ int main( int argc, char **argv )
             break;
         }
     }
+
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+
+    file_logger->info("Solve time (seconds): {0}", elapsed.count());
 
     span<complex<double>> u_writable_history(
         u_history.begin(),
