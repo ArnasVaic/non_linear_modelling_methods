@@ -6,6 +6,7 @@
 #include <span>
 #include <omp.h>
 #include <fstream>
+#include <algorithm>
 #include <cblas.h>
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/basic_file_sink.h"
@@ -14,91 +15,24 @@ extern "C" {
     #include <lapacke.h>
 }
 
+#include "config.hpp"
+#include "my_function.hpp"
+
 using namespace std;
 using namespace std::complex_literals;
-
-// Constants
-constexpr int max_iterations = 100;
-constexpr double _beta = 10.0;
-constexpr double delta = 1e-5;
-
-constexpr int N = 999;
-constexpr int total_points = N + 1;
-constexpr double h = 1 / static_cast<double>(N);
-constexpr double h2 = h * h;
-
-constexpr double T = 40;
-constexpr double tau = 0.001;
-constexpr int total_time_steps = static_cast<int>(T / tau);
-
-// constructing the f(x, t) so that it would fit the exact solution:
-// u(x, t) parameters
-constexpr double A = 0.1;
-constexpr double w0 = 100.0;
-constexpr double sigma = 0.09;
-constexpr double x0 = 0.5;
-
-// B(x)
-inline double B(double x)
-{
-    const double xminx0 = x - x0;
-    return exp(- xminx0 * xminx0 / (4.0 * sigma * sigma));
-}
-
-// ∂/∂x B(x)
-inline double Dx_B(double x)
-{
-    const double c = - 1.0 / (2.0 * sigma * sigma);
-    return c * B(x) * (x - x0);
-}
-
-// ∂²/∂x² B(x)
-inline double Dxx_B(double x)
-{
-    const double c = - 1.0 / (2.0 * sigma * sigma);
-    return c * (Dx_B(x) * (x - x0) + B(x));
-}
-
-// W(x)
-inline complex<double> W(double x) { return exp(1.0i * w0 * x); }
-// ∂/∂x W(x)
-inline complex<double> Dx_W(double x) { return 1.0i * w0 * exp(1.0i * w0 * x); }
-// ∂²/∂x² W(x)
-inline complex<double> Dxx_W(double x) { return - w0 * w0 * exp(1.0i * w0 * x); }
-
-// M(t)
-inline complex<double> M(double t) { return exp(- 1.0i * t); }
-// ∂/∂t M(t)
-
-// my exact solution
-inline complex<double> u_exact(double x, double t)
-{
-    return A * B(x) * W(x) * M(t);
-}
-
-// ∂/∂t u
-inline complex<double> Dt_u(double x, double t)
-{
-    return -1.0i * u_exact(x, t);
-}
-
-// ∂²/∂x² u
-inline complex<double> Dxx_u(double x, double t)
-{
-    return A * M(t) * (Dxx_B(x) * W(x) + 2.0 * Dx_B(x) * Dx_W(x) + B(x) * Dxx_W(x));
-}
-
-// ∂/∂x |u²|u <- the first order part
-inline complex<double> Dx_u2u(double x, double t)
-{
-    return A * A * A * M(t) * ( 3 * B(x) * B(x) * Dx_B(x) * W(x) + B(x) * B(x) * B(x) * Dx_W(x));
-}
 
 // f(x, t) = ∂/∂t u - i ∂²/∂x² u - β ∂/∂x (|u²|u)
 inline complex<double> f(double x, double t)
 {
     return Dt_u(x, t) - 1.0i * Dxx_u(x, t) - _beta * Dx_u2u(x, t);
 }
+
+void initialize_rhs(
+    span<complex<double>> u_old,
+    span<complex<double>> u,
+    span<complex<double>> rhs,
+    int step
+);
 
 int main( int argc, char **argv )
 {
@@ -108,14 +42,23 @@ int main( int argc, char **argv )
     if (!file_logger) {
         std::cerr << "Failed to create file logger!" << std::endl;
     } else {
+        file_logger->info("================================================================");
         file_logger->info("Logger initialized successfully");
     }
 
     file_logger->set_level(spdlog::level::info);
 
+    if (argc < 2)
+    {
+        cerr << "Usage: " << argv[0] << " initial_condition_file1 [initial_condition_file2 ...]" << endl;
+        return 1;
+    }
+
+    const int nrhs = argc - 1; // number of initial condition files
+    file_logger->info("number of initial conditions: {0}", nrhs);
+
     openblas_set_num_threads(omp_get_max_threads());
     file_logger->info("OpenBLAS threads set to {}", omp_get_max_threads());
-
     file_logger->info("max_iterations: {0}", max_iterations);
     file_logger->info("beta: {0}", _beta);
     file_logger->info("delta: {0}", delta);
@@ -127,12 +70,13 @@ int main( int argc, char **argv )
     // manual stop flag
     bool stop_simulation = false;
 
-    // last time step solution
-    vector<complex<double>> u(total_points);       
-    // Incremental approximation storage
-    vector<complex<double>> u_old(total_points), u_new(total_points);
-
     file_logger->info("Initializing tridiagonal matrix diagonals");
+
+    // last time step solution
+    vector<complex<double>> u(nrhs * total_points);       
+    // Incremental approximation storage
+    vector<complex<double>> u_old(nrhs * total_points), u_new(nrhs * total_points);
+
     // Tridiagonal matrix
     vector<complex<double>> super_diagonal(total_points - 1);
     fill(super_diagonal.begin(), super_diagonal.end(), 1.0);
@@ -148,24 +92,50 @@ int main( int argc, char **argv )
     diagonal[total_points - 1]  = 2i * h2 / tau - 1.0;
     vector<complex<double>> diagonal_backup(diagonal);
 
-    vector<complex<double>> rhs(total_points);
+    // Right hand side vector
+    vector<complex<double>> rhs(nrhs * total_points);
 
     file_logger->info("Initializing initial condition vector");
 
-    // Initial condition
-    for (int i = 0; i < total_points; ++i)
+    vector<ofstream> output_file_handles(nrhs);
+
+    // Read initial conditions
+    for (int k = 0; k < nrhs; ++k)
     {
-        const double x = static_cast<double>(i) / N;
-        u[i] = u_exact(x, 0);
+        const string filename = argv[k + 1];
+        ifstream is(filename, ios::binary);
+        if (!is)
+        {
+            file_logger->info("Failed to open initial condition file: {0}", filename);
+            return 1;
+        }
+
+        // Read exactly total_points elements into column k
+        is.read(reinterpret_cast<char*>(&u[k * total_points]), total_points * sizeof(complex<double>));
+        if (!is)
+        {
+            file_logger->info("Error reading data from file: {0}", filename);
+            return 1;
+        }
+
+        is.close();
+
+        // additionally, create a result file
+        output_file_handles[k] = ofstream("solution-" + filename, ios::binary);
+
+        // Write first line
+        output_file_handles[k].write(
+            reinterpret_cast<const char*>(&u[k * total_points]), 
+            total_points * sizeof(complex<double>)
+        );
     }
 
-    const string output_filename = "build/data.bin";
-    ofstream os(output_filename, ios::binary);
+    // helper for slices
+    auto slice = [&](auto& vec, int k) {
+        return std::span<std::complex<double>>(vec.data() + k * total_points, total_points);
+    };
 
-    os.write(
-        reinterpret_cast<const char*>(u.data()), 
-        u.size() * sizeof(complex<double>)
-    );
+    vector<bool> rhs_converged(nrhs);
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -176,48 +146,23 @@ int main( int argc, char **argv )
 
         u_old.assign(u.begin(), u.end());
 
+        fill(rhs_converged.begin(), rhs_converged.end(), false);
+
         for (int iter = 0; iter < max_iterations; ++iter)
         {
-            // Recalculate RHS vector
+            // Recalculate RHS vectors
             #pragma omp parallel for
-            for (int i = 0; i < total_points; ++i)
+            for (int k = 0; k < nrhs; ++k)
             {
-                // Index for laplacian with neumann boundary conditions
-                // we have a simplistic rule that u_0 = u_1 & u_N = u_{N-1}
-                const int il = i ==                0 ?                1 : i - 1;
-                const int ir = i == total_points - 1 ? total_points - 2 : i + 1;
-                
-                // Precompute some results from non-linear first order part
-                const complex<double> half_u_r = 0.5 * (u_old[ir] + u[ir]);
-                const complex<double> half_u_l = 0.5 * (u_old[il] + u[il]);
-
-                const complex<double> half_u_r_abs = abs(half_u_r);
-                const complex<double> half_u_l_abs = abs(half_u_l);
-
-                const double x = static_cast<double>(i) / N;
-
-                rhs[i] =
-
-                    // Single u_j part from the time derivative approx.
-                    2i * h2 / tau * u[i] +
-
-                    // Laplacian part
-                    - u[il] + 2.0 * u[i] - u[ir] +
-
-                    // Non-linear first order part - β ∂/∂x |u|²u
-                    1i * h * _beta * (
-                        (half_u_r_abs * half_u_r_abs * half_u_r) -
-                        (half_u_l_abs * half_u_l_abs * half_u_l)
-                    ) +
-
-                    // Function part
-                    1i * h2 * ( f(x, tau * step) + f(x, tau * (step + 1)) );
+                const int rhs_offset = k * total_points; 
+                initialize_rhs(slice(u_old, k), slice(u, k), slice(rhs, k), step);
             }
 
+            // Solve systems of equations
             lapack_int info = LAPACKE_zgtsv(
                 LAPACK_COL_MAJOR,
                 total_points, 
-                1, 
+                nrhs, 
                 reinterpret_cast<lapack_complex_double*>(sub_diagonal.data()),
                 reinterpret_cast<lapack_complex_double*>(diagonal.data()),
                 reinterpret_cast<lapack_complex_double*>(super_diagonal.data()),
@@ -237,43 +182,66 @@ int main( int argc, char **argv )
             super_diagonal.assign(super_diagonal_backup.begin(), super_diagonal_backup.end());
             diagonal.assign(diagonal_backup.begin(), diagonal_backup.end());
 
+            // LAPACK puts result in rhs
             u_new.assign(rhs.begin(), rhs.end());
 
-            // enforce boundary conditions, no way this is the reason it diverges...
-            u_new[0] = u_new[1];
-            u_new[total_points - 1] = u_new[total_points - 2];
+            for (int k = 0; k < nrhs; ++k)
+            {
+                // enforce boundary conditions
+                const int rhs_offset = k * total_points;
+                u_new[rhs_offset + 0] = u_new[rhs_offset + 1];
+                u_new[rhs_offset + total_points - 1] = u_new[rhs_offset + total_points - 2];
 
-            double max_norm = 0.0;
-            for (int i = 0; i < total_points; ++i)
-            {
-                max_norm = max(max_norm, abs(u_new[i] - u_old[i]));
-            }
+                // Each initial condition might need different number of iterations
 
-            if (max_norm < delta)
-            {
-                file_logger->debug("step = {0}, iter = {1}, max_norm = {2} converged", step, iter, max_norm);
-                break;
-            }
-            else if (iter == max_iterations - 1)
-            {
-                file_logger->warn("step = {0}, iter = {1}, max_norm = {2} reached max iterations", step, iter, max_norm);
-            }
-            else
-            {
-                file_logger->debug("step = {0}, iter = {1}, max_norm = {2}", step, iter, max_norm);   
+                if (rhs_converged[k])
+                {
+                    continue;
+                }
+
+                double max_norm = 0.0;
+                for (int i = 0; i < total_points; ++i)
+                {
+                    max_norm = max(max_norm, abs(u_new[rhs_offset + i] - u_old[rhs_offset + i]));
+                }
+
+                if (max_norm < delta)
+                {
+                    file_logger->debug("rhs = {3}, step = {0}, iter = {1}, max_norm = {2} converged", step, iter, max_norm, k);
+                    rhs_converged[k] = true;
+                }
+                else
+                {
+                    if (iter == max_iterations - 1)
+                    {
+                        file_logger->warn("rhs = {3}, step = {0}, iter = {1}, max_norm = {2} reached max iterations", step, iter, max_norm, k);
+                    }
+                    else
+                    {
+                        file_logger->debug("rhs = {3}, step = {0}, iter = {1}, max_norm = {2}", step, iter, max_norm, k);   
+                    }
+                }
             }
 
             u_old.assign(u_new.begin(), u_new.end());
-            
+
+            if ( all_of(rhs_converged.begin(), rhs_converged.end(), [](bool v) { return v; }) )
+            {
+                break; // no need to keep going through iterations if all solutions converged
+            }
         }
 
         u.assign(u_new.begin(), u_new.end());
 
-        os.write(
-            reinterpret_cast<const char*>(u_new.data()), 
-            u_new.size() * sizeof(complex<double>)
-        );
-
+        for (int k = 0; k < nrhs; ++k)
+        {
+            const int rhs_offset = k * total_points;
+            output_file_handles[k].write(
+                reinterpret_cast<const char*>(&u[k * total_points]), 
+                total_points * sizeof(complex<double>)
+            );
+        }
+        
         if (step % 100 == 0) file_logger->flush();
 
         if (stop_simulation)
@@ -281,9 +249,57 @@ int main( int argc, char **argv )
             break;
         }
     }
+
     auto end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = end - start;
     file_logger->info("Solve time (seconds): {0}", elapsed.count());
-    file_logger->info("Results written to {0}", output_filename);
-    os.close();
+    file_logger->info("Solve time per initial condition (seconds): {0}", elapsed.count() / nrhs);
+
+    for (int k = 0; k < nrhs; ++k)
+    {
+        file_logger->info("Results written to {0}",  "solution-" + string(argv[k + 1]));
+        output_file_handles[k].close();
+    }
+}
+
+void initialize_rhs(
+    span<complex<double>> u_old,
+    span<complex<double>> u,
+    span<complex<double>> rhs,
+    int step
+)
+{
+    for (int i = 0; i < total_points; ++i)
+    {
+        // Index for laplacian with neumann boundary conditions
+        // we have a simplistic rule that u_0 = u_1 & u_N = u_{N-1}
+        const int il = i ==                0 ?                1 : i - 1;
+        const int ir = i == total_points - 1 ? total_points - 2 : i + 1;
+        
+        // Precompute some results from non-linear first order part
+        const complex<double> half_u_r = 0.5 * (u_old[ir] + u[ir]);
+        const complex<double> half_u_l = 0.5 * (u_old[il] + u[il]);
+
+        const complex<double> half_u_r_abs = abs(half_u_r);
+        const complex<double> half_u_l_abs = abs(half_u_l);
+
+        const double x = static_cast<double>(i) / N;
+
+        rhs[i] =
+
+            // Single u_j part from the time derivative approx.
+            2i * h2 / tau * u[i] +
+
+            // Laplacian part
+            - u[il] + 2.0 * u[i] - u[ir] +
+
+            // Non-linear first order part - β ∂/∂x |u|²u
+            1i * h * _beta * (
+                (half_u_r_abs * half_u_r_abs * half_u_r) -
+                (half_u_l_abs * half_u_l_abs * half_u_l)
+            ) +
+
+            // Function part
+            1i * h2 * ( f(x, tau * step) + f(x, tau * (step + 1)) );
+    }
 }

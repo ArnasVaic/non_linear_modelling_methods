@@ -2,6 +2,12 @@
 #SBATCH -p main
 #SBATCH -n 1
 
+# go to the directory where your files are
+cd $SLURM_SUBMIT_DIR
+
+# optional: list files to confirm
+ls -l
+
 module load openmpi
 module load openblas
 
@@ -17,4 +23,6 @@ mpic++ \
     -I extern/spdlog/include \
     -Wl,-rpath,${OPENBLAS_DIR}/lib
 
-mpirun ./build/main
+cd build
+
+srun ./main initial_condition_my_function.bin initial_condition_linear.bin
