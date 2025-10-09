@@ -17,10 +17,87 @@ extern "C" {
 using namespace std;
 using namespace std::complex_literals;
 
-complex<double> f(double x, double t)
+// Constants
+constexpr int max_iterations = 100;
+constexpr double _beta = 10.0;
+constexpr double delta = 1e-5;
+
+constexpr int N = 999;
+constexpr int total_points = N + 1;
+constexpr double h = 1 / static_cast<double>(N);
+constexpr double h2 = h * h;
+
+constexpr double T = 1;
+constexpr double tau = 0.0001;
+constexpr int total_time_steps = static_cast<int>(T / tau);
+
+// constructing the f(x, t) so that it would fit the exact solution:
+// u(x, t) parameters
+constexpr double A = 0.1;
+constexpr double w0 = 100.0;
+constexpr double sigma = 0.09;
+constexpr double x0 = 0.5;
+
+// B(x)
+inline double B(double x)
 {
-    // return 25.0 * exp(25i * x);
-    return 0.0;
+    const double xminx0 = x - x0;
+    return exp(- xminx0 * xminx0 / (4.0 * sigma * sigma));
+}
+
+// ∂/∂x B(x)
+inline double Dx_B(double x)
+{
+    const double c = - 1.0 / (2.0 * sigma * sigma);
+    return c * B(x) * (x - x0);
+}
+
+// ∂²/∂x² B(x)
+inline double Dxx_B(double x)
+{
+    const double c = - 1.0 / (2.0 * sigma * sigma);
+    return c * (Dx_B(x) * (x - x0) + B(x));
+}
+
+// W(x)
+inline complex<double> W(double x) { return exp(1.0i * w0 * x); }
+// ∂/∂x W(x)
+inline complex<double> Dx_W(double x) { return 1.0i * w0 * exp(1.0i * w0 * x); }
+// ∂²/∂x² W(x)
+inline complex<double> Dxx_W(double x) { return - w0 * w0 * exp(1.0i * w0 * x); }
+
+// M(t)
+inline complex<double> M(double t) { return exp(- 1.0i * t); }
+// ∂/∂t M(t)
+
+// my exact solution
+inline complex<double> u_exact(double x, double t)
+{
+    return A * B(x) * W(x) * M(t);
+}
+
+// ∂/∂t u
+inline complex<double> Dt_u(double x, double t)
+{
+    return -1.0i * u_exact(x, t);
+}
+
+// ∂²/∂x² u
+inline complex<double> Dxx_u(double x, double t)
+{
+    return A * M(t) * (Dxx_B(x) * W(x) + 2.0 * Dx_B(x) * Dx_W(x) + B(x) * Dxx_W(x));
+}
+
+// ∂/∂x |u²|u <- the first order part
+inline complex<double> Dx_u2u(double x, double t)
+{
+    return A * A * A * M(t) * ( 3 * B(x) * B(x) * Dx_B(x) * W(x) + B(x) * B(x) * B(x) * Dx_W(x));
+}
+
+// f(x, t) = ∂/∂t u - i ∂²/∂x² u - β ∂/∂x (|u²|u)
+inline complex<double> f(double x, double t)
+{
+    return Dt_u(x, t) - 1.0i * Dxx_u(x, t) - _beta * Dx_u2u(x, t);
 }
 
 int main( int argc, char **argv )
@@ -39,22 +116,8 @@ int main( int argc, char **argv )
     openblas_set_num_threads(omp_get_max_threads());
     file_logger->info("OpenBLAS threads set to {}", omp_get_max_threads());
 
-    // Constants
-    constexpr int max_iterations = 100;
-    constexpr double beta = 10.0;
-    constexpr double delta = 1e-5;
-    
-    constexpr int N = 999;
-    constexpr int total_points = N + 1;
-    constexpr double h = 1 / static_cast<double>(N);
-    constexpr double h2 = h * h;
-
-    constexpr double T = 1;
-    constexpr double tau = 0.0001;
-    constexpr int total_time_steps = static_cast<int>(T / tau);
-
     file_logger->info("max_iterations: {0}", max_iterations);
-    file_logger->info("beta: {0}", beta);
+    file_logger->info("beta: {0}", _beta);
     file_logger->info("delta: {0}", delta);
     file_logger->info("N: {0}", N);
     file_logger->info("h: {0}", h);
@@ -88,18 +151,12 @@ int main( int argc, char **argv )
     vector<complex<double>> rhs(total_points);
 
     file_logger->info("Initializing initial condition vector");
+
     // Initial condition
     for (int i = 0; i < total_points; ++i)
     {
         const double x = static_cast<double>(i) / N;
-        // Time step is zero, fill from start
-        // u[i] = cos(2.0 * numbers::pi * x) * exp(1i * numbers::pi / 4.0); // somethind idk
-        // u[i] = cos(4.0 * numbers::pi * x); // linear
-
-        const double A = 0.1;
-        const double x0 = 0.5;
-        const double sigma = 0.01;
-        u[i] = A * exp(-pow(x - x0, 2)/(2 * sigma * sigma)) * exp(1i * 5.0 * numbers::pi * x); // gauss wavepacket simple
+        u[i] = u_exact(x, 0);
     }
 
     const string output_filename = "build/data.bin";
@@ -148,7 +205,7 @@ int main( int argc, char **argv )
                     - u[il] + 2.0 * u[i] - u[ir] +
 
                     // Non-linear first order part - β ∂/∂x |u|²u
-                    1i * h * beta * (
+                    1i * h * _beta * (
                         (half_u_r_abs * half_u_r_abs * half_u_r) -
                         (half_u_l_abs * half_u_l_abs * half_u_l)
                     ) +
