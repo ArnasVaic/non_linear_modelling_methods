@@ -62,7 +62,7 @@ inline complex<double> Dxx_u(double x, double t)
     return A * M(t) * (Dxx_B(x) * W(x) + 2.0 * Dx_B(x) * Dx_W(x) + B(x) * Dxx_W(x));
 }
 
-// ∂/∂x |u²|u <- the first order part
+// ∂/∂x |u|²u <- the first order part
 inline complex<double> Dx_u2u(double x, double t)
 {
     return A * A * A * M(t) * ( 3 * B(x) * B(x) * Dx_B(x) * W(x) + B(x) * B(x) * B(x) * Dx_W(x));
