@@ -75,7 +75,7 @@ int main( int argc, char **argv )
     // last time step solution
     vector<complex<double>> u(nrhs * total_points);       
     // Incremental approximation storage
-    vector<complex<double>> u_old(nrhs * total_points), u_new(nrhs * total_points);
+    vector<complex<double>> u_old(nrhs * total_points);
 
     // Tridiagonal matrix
     vector<complex<double>> super_diagonal(total_points - 1);
@@ -151,7 +151,6 @@ int main( int argc, char **argv )
         for (int iter = 0; iter < max_iterations; ++iter)
         {
             // Recalculate RHS vectors
-            #pragma omp parallel for
             for (int k = 0; k < nrhs; ++k)
             {
                 const int rhs_offset = k * total_points; 
@@ -182,15 +181,12 @@ int main( int argc, char **argv )
             super_diagonal.assign(super_diagonal_backup.begin(), super_diagonal_backup.end());
             diagonal.assign(diagonal_backup.begin(), diagonal_backup.end());
 
-            // LAPACK puts result in rhs
-            u_new.assign(rhs.begin(), rhs.end());
-
             for (int k = 0; k < nrhs; ++k)
             {
                 // enforce boundary conditions
                 const int rhs_offset = k * total_points;
-                u_new[rhs_offset + 0] = u_new[rhs_offset + 1];
-                u_new[rhs_offset + total_points - 1] = u_new[rhs_offset + total_points - 2];
+                rhs[rhs_offset + 0] = rhs[rhs_offset + 1];
+                rhs[rhs_offset + total_points - 1] = rhs[rhs_offset + total_points - 2];
 
                 // Each initial condition might need different number of iterations
 
@@ -202,7 +198,7 @@ int main( int argc, char **argv )
                 double max_norm = 0.0;
                 for (int i = 0; i < total_points; ++i)
                 {
-                    max_norm = max(max_norm, abs(u_new[rhs_offset + i] - u_old[rhs_offset + i]));
+                    max_norm = max(max_norm, abs(rhs[rhs_offset + i] - u_old[rhs_offset + i]));
                 }
 
                 if (max_norm < delta)
@@ -223,21 +219,21 @@ int main( int argc, char **argv )
                 }
             }
 
-            u_old.assign(u_new.begin(), u_new.end());
-
-            if ( all_of(rhs_converged.begin(), rhs_converged.end(), [](bool v) { return v; }) )
+            if ( iter == max_iterations - 1 || all_of(rhs_converged.begin(), rhs_converged.end(), [](bool v) { return v; }) )
             {
                 break; // no need to keep going through iterations if all solutions converged
             }
+
+            swap(u_old, rhs);
         }
 
-        u.assign(u_new.begin(), u_new.end());
+        u.assign(rhs.begin(), rhs.end());
 
         for (int k = 0; k < nrhs; ++k)
         {
             const int rhs_offset = k * total_points;
             output_file_handles[k].write(
-                reinterpret_cast<const char*>(&u[k * total_points]), 
+                reinterpret_cast<const char*>(&rhs[k * total_points]), 
                 total_points * sizeof(complex<double>)
             );
         }
@@ -269,6 +265,7 @@ void initialize_rhs(
     int step
 )
 {
+    #pragma omp parallel for
     for (int i = 0; i < total_points; ++i)
     {
         // Index for laplacian with neumann boundary conditions
