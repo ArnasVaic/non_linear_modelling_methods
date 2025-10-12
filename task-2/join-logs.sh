@@ -1,0 +1,1 @@
+grep -h . logs/log_rank_*.txt | sort -k1,1 > logs/combined.log

@@ -1,302 +1,133 @@
 #include <iostream>
 #include <complex>
 #include <vector>
-#include <numbers>
-#include <chrono>
 #include <span>
 #include <omp.h>
+#include <mpi.h>
 #include <fstream>
+#include <format>
 #include <algorithm>
 #include <cblas.h>
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/basic_file_sink.h"
+#include <cereal/archives/json.hpp>
 
-extern "C" {
-    #include <lapacke.h>
-}
-
-#include "config.hpp"
+#include "solver_config.hpp"
 #include "my_function.hpp"
+#include "schrodinger_solver.hpp"
 
 using namespace std;
 using namespace std::complex_literals;
 
-// f(x, t) = ∂/∂t u - i ∂²/∂x² u - β ∂/∂x (|u²|u)
-inline complex<double> f(double x, double t)
+vector<string> get_assigned_configs(int argc, char **argv, int world_rank, int world_size)
 {
-    return Dt_u(x, t) - 1.0i * Dxx_u(x, t) - _beta * Dx_u2u(x, t);
-}
+    // First arg is reserved for initial condition file
+    int config_cnt = argc - 1;
+    int configs_per_rank = config_cnt / world_size;
 
-void initialize_rhs(
-    span<complex<double>> u_old,
-    span<complex<double>> u,
-    span<complex<double>> rhs,
-    int step
-);
+    // remainder of configs that can be split evenly amongst the ranks
+    int remaining = config_cnt % world_size;
+
+    // First 'remaining' ranks get one extra config
+    int configs_for_this_rank = world_rank < remaining
+        ? configs_per_rank + 1
+        : configs_per_rank;
+
+    vector<string> filenames(configs_for_this_rank);
+
+    int rank_offset = world_rank <= remaining
+        ? world_rank * (configs_per_rank + 1)
+        : remaining * (configs_per_rank + 1) + (world_rank - remaining) * configs_per_rank;
+
+    for (int i = 0; i < configs_for_this_rank; ++i)
+    {
+        filenames[i] = string(argv[rank_offset + 1 + i]);
+    }
+    
+    return filenames;
+}
 
 int main( int argc, char **argv )
 {
-    // Create a logger without throwing
-    auto file_logger = spdlog::basic_logger_mt("file_logger", "build/log.txt");
-    
-    if (!file_logger) {
-        std::cerr << "Failed to create file logger!" << std::endl;
-    } else {
-        file_logger->info("================================================================");
-        file_logger->info("Logger initialized successfully");
-    }
-
-    file_logger->set_level(spdlog::level::info);
-
-    if (argc < 2)
+    // 1 arg is for initial condition, others are for solver configurations
+    if (argc < 3)
     {
-        cerr << "Usage: " << argv[0] << " initial_condition_file1 [initial_condition_file2 ...]" << endl;
+        cerr << "Usage: " << argv[0] << " config_file { config_file }" << endl;
         return 1;
     }
+    
+    // MPI intialization
+    MPI_Init(&argc, &argv);
 
-    const int nrhs = argc - 1; // number of initial condition files
-    file_logger->info("number of initial conditions: {0}", nrhs);
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
+    // Logger configuration
+    string log_filename = format("logs/log_rank_{}.log", world_rank);
+    auto file_logger = spdlog::basic_logger_mt("file_logger", log_filename);
+    
+    if (!file_logger) {
+        cerr << "Failed to create file logger for rank " << world_rank;
+    } else {
+        file_logger->info("Logger initialized successfully for rank {0}", world_rank);
+    }
+    file_logger->set_level(spdlog::level::info);
+
+    if (world_rank == 0)
+    {
+        file_logger->info("MPI initialized with world size {0}", world_size);
+    }
 
     openblas_set_num_threads(omp_get_max_threads());
-    file_logger->info("OpenBLAS threads set to {}", omp_get_max_threads());
-    file_logger->info("max_iterations: {0}", max_iterations);
-    file_logger->info("beta: {0}", _beta);
-    file_logger->info("delta: {0}", delta);
-    file_logger->info("N: {0}", N);
-    file_logger->info("h: {0}", h);
-    file_logger->info("tau: {0}", tau);
-    file_logger->info("total_time_steps: {0}", total_time_steps);
+    file_logger->info("rank = {0}, OpenBLAS threads set to {1}", world_rank, omp_get_max_threads());
 
-    // manual stop flag
-    bool stop_simulation = false;
+    // Config loading and solving
+    vector<string> filenames = get_assigned_configs(argc, argv, world_rank, world_size);
 
-    file_logger->info("Initializing tridiagonal matrix diagonals");
-
-    // last time step solution
-    vector<complex<double>> u(nrhs * total_points);       
-    // Incremental approximation storage
-    vector<complex<double>> u_old(nrhs * total_points);
-
-    // Tridiagonal matrix
-    vector<complex<double>> super_diagonal(total_points - 1);
-    fill(super_diagonal.begin(), super_diagonal.end(), 1.0);
-    vector<complex<double>> super_diagonal_backup(super_diagonal);
-
-    vector<complex<double>> sub_diagonal(total_points - 1);
-    fill(sub_diagonal.begin(), sub_diagonal.end(), 1.0);
-    vector<complex<double>> sub_diagonal_backup(sub_diagonal);
-
-    vector<complex<double>> diagonal(total_points);
-    fill(diagonal.begin(), diagonal.end(), 2i * h2 / tau - 2.0);
-    diagonal[0]                 = 2i * h2 / tau - 1.0;
-    diagonal[total_points - 1]  = 2i * h2 / tau - 1.0;
-    vector<complex<double>> diagonal_backup(diagonal);
-
-    // Right hand side vector
-    vector<complex<double>> rhs(nrhs * total_points);
-
-    file_logger->info("Initializing initial condition vector");
-
-    vector<ofstream> output_file_handles(nrhs);
-
-    // Read initial conditions
-    for (int k = 0; k < nrhs; ++k)
+    file_logger->info("Rank {0} assigned {1} configurations in total", world_rank, filenames.size());
+    for(int i = 0; i < filenames.size(); ++i)
     {
-        const string filename = argv[k + 1];
-        ifstream is(filename, ios::binary);
-        if (!is)
-        {
-            file_logger->info("Failed to open initial condition file: {0}", filename);
-            return 1;
-        }
+        file_logger->info("Rank {0} assigned configuration {1}", world_rank, filenames[i]);
 
-        // Read exactly total_points elements into column k
-        is.read(reinterpret_cast<char*>(&u[k * total_points]), total_points * sizeof(complex<double>));
-        if (!is)
-        {
-            file_logger->info("Error reading data from file: {0}", filename);
-            return 1;
-        }
+        solver_config_t config;
+        ifstream is(filenames[i]);
 
-        is.close();
-
-        // additionally, create a result file
-        output_file_handles[k] = ofstream("solution-" + filename, ios::binary);
-
-        // Write first line
-        output_file_handles[k].write(
-            reinterpret_cast<const char*>(&u[k * total_points]), 
-            total_points * sizeof(complex<double>)
-        );
-    }
-
-    // helper for slices
-    auto slice = [&](auto& vec, int k) {
-        return std::span<std::complex<double>>(vec.data() + k * total_points, total_points);
-    };
-
-    vector<bool> rhs_converged(nrhs);
-
-    auto start = std::chrono::high_resolution_clock::now();
-
-    // when step is t, we are calculating solution at t + 1
-    for (int step = 0; step < total_time_steps - 1; ++step)
-    {
-        const int time_step_offset = step * total_points;
-
-        u_old.assign(u.begin(), u.end());
-
-        fill(rhs_converged.begin(), rhs_converged.end(), false);
-
-        for (int iter = 0; iter < max_iterations; ++iter)
-        {
-            // Recalculate RHS vectors
-            for (int k = 0; k < nrhs; ++k)
-            {
-                const int rhs_offset = k * total_points; 
-                initialize_rhs(slice(u_old, k), slice(u, k), slice(rhs, k), step);
-            }
-
-            // Solve systems of equations
-            lapack_int info = LAPACKE_zgtsv(
-                LAPACK_COL_MAJOR,
-                total_points, 
-                nrhs, 
-                reinterpret_cast<lapack_complex_double*>(sub_diagonal.data()),
-                reinterpret_cast<lapack_complex_double*>(diagonal.data()),
-                reinterpret_cast<lapack_complex_double*>(super_diagonal.data()),
-                reinterpret_cast<lapack_complex_double*>(rhs.data()),
-                total_points
-            );
-
-            if (info != 0) {
-                // Early exit
-                file_logger->error("LAPACKE_zgtsv failed, info = {0}", info);
-                stop_simulation = true;
-                break;
-            }
-
-            // Reinitialize tridiagonal containers (ChatGPT says they might be overwriten...)
-            sub_diagonal.assign(sub_diagonal_backup.begin(), sub_diagonal_backup.end());
-            super_diagonal.assign(super_diagonal_backup.begin(), super_diagonal_backup.end());
-            diagonal.assign(diagonal_backup.begin(), diagonal_backup.end());
-
-            for (int k = 0; k < nrhs; ++k)
-            {
-                // enforce boundary conditions
-                const int rhs_offset = k * total_points;
-                rhs[rhs_offset + 0] = rhs[rhs_offset + 1];
-                rhs[rhs_offset + total_points - 1] = rhs[rhs_offset + total_points - 2];
-
-                // Each initial condition might need different number of iterations
-
-                if (rhs_converged[k])
-                {
-                    continue;
-                }
-
-                double max_norm = 0.0;
-                for (int i = 0; i < total_points; ++i)
-                {
-                    max_norm = max(max_norm, abs(rhs[rhs_offset + i] - u_old[rhs_offset + i]));
-                }
-
-                if (max_norm < delta)
-                {
-                    file_logger->debug("rhs = {3}, step = {0}, iter = {1}, max_norm = {2} converged", step, iter, max_norm, k);
-                    rhs_converged[k] = true;
-                }
-                else
-                {
-                    if (iter == max_iterations - 1)
-                    {
-                        file_logger->warn("rhs = {3}, step = {0}, iter = {1}, max_norm = {2} reached max iterations", step, iter, max_norm, k);
-                    }
-                    else
-                    {
-                        file_logger->debug("rhs = {3}, step = {0}, iter = {1}, max_norm = {2}", step, iter, max_norm, k);   
-                    }
-                }
-            }
-
-            if ( iter == max_iterations - 1 || all_of(rhs_converged.begin(), rhs_converged.end(), [](bool v) { return v; }) )
-            {
-                break; // no need to keep going through iterations if all solutions converged
-            }
-
-            swap(u_old, rhs);
-        }
-
-        u.assign(rhs.begin(), rhs.end());
-
-        for (int k = 0; k < nrhs; ++k)
-        {
-            const int rhs_offset = k * total_points;
-            output_file_handles[k].write(
-                reinterpret_cast<const char*>(&rhs[k * total_points]), 
-                total_points * sizeof(complex<double>)
-            );
+        try {
+            cereal::JSONInputArchive archive(is);
+            archive(config);
+        } catch (cereal::RapidJSONException& e) {
+            std::cerr << "JSON parse error: " << e.what() << std::endl;
+            std::exit(1);
         }
         
-        if (step % 100 == 0) file_logger->flush();
-
-        if (stop_simulation)
+        // initial condition
+        vector<complex<double>> u0(config.total_points);
+        for(int i = 0; i < config.total_points; ++i)
         {
-            break;
+            const double x = i * config.h;
+            u0[i] = u_exact(x, 0);
         }
+
+        // Setup solver
+        string sol_filename = format("rank_{}_config_{}.bin", world_rank, i);
+        ofstream os(sol_filename, std::ios::binary);
+
+        auto func = [&config](double x, double t){ return f(x, t, config.beta); };
+
+        schrodinger_solver_t solver(config, func, os, file_logger, world_rank);
+
+        // Solve
+        solver.solve(u0);
+
+        // Cleanup
+        os.close();
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed = end - start;
-    file_logger->info("Solve time (seconds): {0}", elapsed.count());
-    file_logger->info("Solve time per initial condition (seconds): {0}", elapsed.count() / nrhs);
 
-    for (int k = 0; k < nrhs; ++k)
-    {
-        file_logger->info("Results written to {0}",  "solution-" + string(argv[k + 1]));
-        output_file_handles[k].close();
-    }
-}
+    MPI_Finalize();
 
-void initialize_rhs(
-    span<complex<double>> u_old,
-    span<complex<double>> u,
-    span<complex<double>> rhs,
-    int step
-)
-{
-    #pragma omp parallel for
-    for (int i = 0; i < total_points; ++i)
-    {
-        // Index for laplacian with neumann boundary conditions
-        // we have a simplistic rule that u_0 = u_1 & u_N = u_{N-1}
-        const int il = i ==                0 ?                1 : i - 1;
-        const int ir = i == total_points - 1 ? total_points - 2 : i + 1;
-        
-        // Precompute some results from non-linear first order part
-        const complex<double> half_u_r = 0.5 * (u_old[ir] + u[ir]);
-        const complex<double> half_u_l = 0.5 * (u_old[il] + u[il]);
-
-        const complex<double> half_u_r_abs = abs(half_u_r);
-        const complex<double> half_u_l_abs = abs(half_u_l);
-
-        const double x = static_cast<double>(i) / N;
-
-        rhs[i] =
-
-            // Single u_j part from the time derivative approx.
-            2i * h2 / tau * u[i] +
-
-            // Laplacian part
-            - u[il] + 2.0 * u[i] - u[ir] +
-
-            // Non-linear first order part - β ∂/∂x |u|²u
-            1i * h * _beta * (
-                (half_u_r_abs * half_u_r_abs * half_u_r) -
-                (half_u_l_abs * half_u_l_abs * half_u_l)
-            ) +
-
-            // Function part
-            1i * h2 * ( f(x, tau * step) + f(x, tau * (step + 1)) );
-    }
+    return 0;
 }

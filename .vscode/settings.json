@@ -68,7 +68,14 @@
     "map": "cpp",
     "expected": "cpp",
     "regex": "cpp",
-    "source_location": "cpp"
+    "source_location": "cpp",
+    "csignal": "cpp",
+    "forward_list": "cpp",
+    "list": "cpp",
+    "set": "cpp",
+    "future": "cpp",
+    "typeindex": "cpp",
+    "valarray": "cpp"
 },
 "cmake.sourceDirectory": "/home/arnas/projects/masters/non_linear_modelling_methods/task-2"
 }

@@ -21,8 +21,9 @@ mpic++ \
     -std=c++23 \
     -fopenmp \
     -I extern/spdlog/include \
+    -I extern/cereal/include \
     -Wl,-rpath,${OPENBLAS_DIR}/lib
 
 cd build
 
-srun ./main initial_condition_my_function.bin initial_condition_linear.bin
+srun ./main initial_condition_linear.bin

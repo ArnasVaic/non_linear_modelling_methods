@@ -1,3 +1,6 @@
 [submodule "task-2/extern/spdlog"]
 	path = task-2/extern/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "task-2/extern/cereal"]
+	path = task-2/extern/cereal
+	url = https://github.com/USCiLab/cereal.git

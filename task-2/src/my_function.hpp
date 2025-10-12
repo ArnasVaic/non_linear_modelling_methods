@@ -35,14 +35,15 @@ inline double Dxx_B(double x)
 
 // W(x)
 inline complex<double> W(double x) { return exp(1.0i * w0 * x); }
+
 // ∂/∂x W(x)
 inline complex<double> Dx_W(double x) { return 1.0i * w0 * exp(1.0i * w0 * x); }
+
 // ∂²/∂x² W(x)
 inline complex<double> Dxx_W(double x) { return - w0 * w0 * exp(1.0i * w0 * x); }
 
 // M(t)
 inline complex<double> M(double t) { return exp(- 1.0i * t); }
-// ∂/∂t M(t)
 
 // my exact solution
 inline complex<double> u_exact(double x, double t)
@@ -66,4 +67,10 @@ inline complex<double> Dxx_u(double x, double t)
 inline complex<double> Dx_u2u(double x, double t)
 {
     return A * A * A * M(t) * ( 3 * B(x) * B(x) * Dx_B(x) * W(x) + B(x) * B(x) * B(x) * Dx_W(x));
+}
+
+// f(x, t) = ∂/∂t u - i ∂²/∂x² u - β ∂/∂x (|u²|u)
+inline complex<double> f(double x, double t, double beta)
+{
+    return Dt_u(x, t) - 1.0i * Dxx_u(x, t) - beta * Dx_u2u(x, t);
 }
