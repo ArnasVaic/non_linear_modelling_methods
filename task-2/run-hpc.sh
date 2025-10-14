@@ -22,8 +22,6 @@ cd build
 
 mpirun ./main ../configs/low.json ../configs/mid.json ../configs/high.json
 
-ls la
-
 cd ..
 
 ./join-logs.sh

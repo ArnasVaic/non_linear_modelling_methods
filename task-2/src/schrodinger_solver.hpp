@@ -119,6 +119,8 @@ struct schrodinger_solver_t
     {
         u.assign(u0.begin(), u0.end());
 
+        write_solution_step(u0);
+
         auto start = std::chrono::high_resolution_clock::now();
 
         // when step is t, we are calculating solution at t + tau
