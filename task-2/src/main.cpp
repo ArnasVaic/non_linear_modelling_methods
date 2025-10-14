@@ -5,7 +5,6 @@
 #include <omp.h>
 #include <mpi.h>
 #include <fstream>
-#include <format>
 #include <algorithm>
 #include <cblas.h>
 #include "spdlog/spdlog.h"
@@ -20,7 +19,7 @@ using namespace std;
 using namespace std::complex_literals;
 
 double calculate_max_norm(solver_config_t const& config, istream &is);
-vector<string> get_assigned_configs(int argc, char **argv, int world_rank, int world_size);
+vector<tuple<string, int>> get_assigned_configs(int argc, char **argv, int world_rank, int world_size);
 
 int main( int argc, char **argv )
 {
@@ -40,7 +39,7 @@ int main( int argc, char **argv )
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
     // Logger configuration
-    string log_filename = format("logs/log_rank_{}.log", world_rank);
+    string log_filename = "../logs/log_rank_" + to_string(world_rank) + ".log";
     auto file_logger = spdlog::basic_logger_mt("file_logger", log_filename);
     
     if (!file_logger) {
@@ -59,15 +58,23 @@ int main( int argc, char **argv )
     file_logger->info("[rank: {0}] OpenBLAS threads set to {1}", world_rank, omp_get_max_threads());
 
     // Config loading and solving
-    vector<string> filenames = get_assigned_configs(argc, argv, world_rank, world_size);
+    vector<tuple<string, int>> filename_index_pairs = get_assigned_configs(argc, argv, world_rank, world_size);
 
-    file_logger->info("[rank: {0}] Assigned {1} configurations in total", world_rank, filenames.size());
-    for(int i = 0; i < filenames.size(); ++i)
+    file_logger->info("[rank: {0}] Assigned {1} configurations in total", world_rank, filename_index_pairs.size());
+    for(int i = 0; i < filename_index_pairs.size(); ++i)
     {
-        file_logger->info("[rank: {0}] Assigned configuration {1} [id: {2}]", world_rank, filenames[i], i);
+        const string config_filename = get<0>(filename_index_pairs[i]);
+        const int config_id = get<1>(filename_index_pairs[i]);
+
+        file_logger->info(
+            "[rank: {0}] Assigned configuration {1} [id: {2}]", 
+            world_rank, 
+            config_filename, 
+            config_id
+        );
 
         solver_config_t config;
-        ifstream is(filenames[i]);
+        ifstream is(config_filename);
 
         try {
             cereal::JSONInputArchive archive(is);
@@ -87,12 +94,12 @@ int main( int argc, char **argv )
         }
 
         // Setup solver
-        string sol_filename = format("build/rank_{}_config_{}.bin", world_rank, i);
+        const string sol_filename = "build/data-" + to_string(i) + ".bin";
         ofstream os(sol_filename, std::ios::binary);
 
         auto func = [&config](double x, double t){ return f(x, t, config.beta); };
 
-        schrodinger_solver_t solver(config, i, func, os, file_logger, world_rank);
+        schrodinger_solver_t solver(config, config_id, func, os, file_logger, world_rank);
 
         // Solve
         solver.solve(u0);
@@ -108,7 +115,7 @@ int main( int argc, char **argv )
 
         is.close();
 
-        file_logger->info("[id: {0}] max_norm = {1}", i, max_norm);
+        file_logger->info("[id: {0}] max_norm = {1}", config_id, max_norm);
     }
 
 
@@ -117,7 +124,7 @@ int main( int argc, char **argv )
     return 0;
 }
 
-vector<string> get_assigned_configs(int argc, char **argv, int world_rank, int world_size)
+vector<tuple<string, int>> get_assigned_configs(int argc, char **argv, int world_rank, int world_size)
 {
     // First arg is reserved for initial condition file
     int config_cnt = argc - 1;
@@ -131,7 +138,7 @@ vector<string> get_assigned_configs(int argc, char **argv, int world_rank, int w
         ? configs_per_rank + 1
         : configs_per_rank;
 
-    vector<string> filenames(configs_for_this_rank);
+    vector<tuple<string, int>> filename_index_pairs(configs_for_this_rank);
 
     int rank_offset = world_rank <= remaining
         ? world_rank * (configs_per_rank + 1)
@@ -139,10 +146,10 @@ vector<string> get_assigned_configs(int argc, char **argv, int world_rank, int w
 
     for (int i = 0; i < configs_for_this_rank; ++i)
     {
-        filenames[i] = string(argv[rank_offset + 1 + i]);
+        filename_index_pairs[i] = { string(argv[rank_offset + 1 + i]), rank_offset + i };
     }
     
-    return filenames;
+    return filename_index_pairs;
 }
 
 double calculate_max_norm(solver_config_t const& config, istream &is)

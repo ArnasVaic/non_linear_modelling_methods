@@ -1,12 +1,6 @@
 #!/bin/bash
 #SBATCH -p main
-#SBATCH -n 1
-
-# go to the directory where your files are
-cd $SLURM_SUBMIT_DIR
-
-# optional: list files to confirm
-ls -l
+#SBATCH -n 4
 
 module load openmpi
 module load openblas
@@ -26,4 +20,8 @@ mpic++ \
 
 cd build
 
-srun ./main initial_condition_linear.bin
+mpirun main ../configs/low.json ../configs/mid.json ../configs/high.json
+
+cd ..
+
+./join-logs.sh
