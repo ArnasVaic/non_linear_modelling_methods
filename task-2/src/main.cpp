@@ -94,7 +94,7 @@ int main( int argc, char **argv )
         }
 
         // Setup solver
-        const string sol_filename = "build/data-" + to_string(i) + ".bin";
+        const string sol_filename = "data-" + to_string(config_id) + ".bin";
         ofstream os(sol_filename, std::ios::binary);
 
         auto func = [&config](double x, double t){ return f(x, t, config.beta); };

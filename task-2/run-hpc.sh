@@ -20,7 +20,9 @@ mpic++ \
 
 cd build
 
-mpirun main ../configs/low.json ../configs/mid.json ../configs/high.json
+mpirun ./main ../configs/low.json ../configs/mid.json ../configs/high.json
+
+ls la
 
 cd ..
 

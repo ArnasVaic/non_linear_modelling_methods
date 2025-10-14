@@ -4,6 +4,15 @@
         "complex": "cpp",
         "numbers": "cpp",
         "string": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "array": "cpp",
+        "tuple": "cpp",
+        "utility": "cpp",
+        "bitset": "cpp",
+        "string_view": "cpp",
+        "initializer_list": "cpp",
+        "span": "cpp",
+        "regex": "cpp",
+        "valarray": "cpp"
     }
 }
