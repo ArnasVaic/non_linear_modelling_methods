@@ -2,6 +2,8 @@
     "files.associations": {
         "cmath": "cpp",
         "complex": "cpp",
-        "numbers": "cpp"
+        "numbers": "cpp",
+        "string": "cpp",
+        "chrono": "cpp"
     }
 }

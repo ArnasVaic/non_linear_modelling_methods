@@ -20,7 +20,10 @@ template<typename Func>
 struct schrodinger_solver_t
 {
     // Solver configuration
-    solver_config_t &config;
+    solver_config_t config;
+
+    // Solver configuration index
+    int config_index;
 
     // Specific solver function 
     Func f;
@@ -55,7 +58,8 @@ struct schrodinger_solver_t
     shared_ptr<spdlog::logger> logger;
 
     schrodinger_solver_t(
-        solver_config_t &config,
+        solver_config_t config,
+        int config_index,
         Func f,
         ostream &os,
         shared_ptr<spdlog::logger> logger,
@@ -63,6 +67,7 @@ struct schrodinger_solver_t
     : f(f)
     , os(os)
     , config(config)
+    , config_index(config_index)
     , logger(logger)
     , world_rank(world_rank)
     {
@@ -73,13 +78,13 @@ struct schrodinger_solver_t
         u_old.resize(config.total_points);
 
         // log config values
-        logger->info("rank = {0}, max_iterations: {1}", world_rank, config.max_iterations);
-        logger->info("rank = {0}, beta: {1}", world_rank, config.beta);
-        logger->info("rank = {0}, delta: {1}", world_rank, config.delta);
-        logger->info("rank = {0}, N: {1}", world_rank, config.N);
-        logger->info("rank = {0}, h: {1}", world_rank, config.h);
-        logger->info("rank = {0}, tau: {1}", world_rank, config.tau);
-        logger->info("rank = {0}, total_time_steps: {1}", world_rank, config.total_time_steps);
+        logger->info("[id: {0}] max_iterations: {1}", config_index , config.max_iterations);
+        logger->info("[id: {0}] beta: {1}", config_index, config.beta);
+        logger->info("[id: {0}] delta: {1}", config_index, config.delta);
+        logger->info("[id: {0}] N: {1}", config_index, config.N);
+        logger->info("[id: {0}] h: {1}", config_index, config.h);
+        logger->info("[id: {0}] tau: {1}", config_index, config.tau);
+        logger->info("[id: {0}] total_time_steps: {1}", config_index, config.total_time_steps);
     }
 
     void initialize_tridiagonals()
@@ -110,8 +115,10 @@ struct schrodinger_solver_t
         diagonal_copy = diagonal;
     }
 
-    void solve(vector<complex<double>> u0)
+    void solve(vector<complex<double>> const& u0)
     {
+        u.assign(u0.begin(), u0.end());
+
         auto start = std::chrono::high_resolution_clock::now();
 
         // when step is t, we are calculating solution at t + tau
@@ -121,7 +128,11 @@ struct schrodinger_solver_t
             // part from the current value of u
             u_old.assign(u.begin(), u.end());
 
-            solve_step(step);
+            lapack_int info = solve_step(step);
+            if (info != 0)
+            {
+                break;
+            }
 
             // After solving for u_next, assign it to u and repeat
             u.assign(u_next.begin(), u_next.end());
@@ -131,7 +142,7 @@ struct schrodinger_solver_t
 
         auto end = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = end - start;
-        logger->info("rank = {0}, solve time (seconds): {1}", world_rank, elapsed.count());
+        logger->info("[id: {0}] Solve time (seconds): {1}", config_index, elapsed.count());
     }
 
     inline lapack_int solve_system()
@@ -166,9 +177,17 @@ struct schrodinger_solver_t
             lapack_int info = solve_system();
             
             if (info != 0) {
-                logger->error("rank = {0}, LAPACKE_zgtsv failed, info = {1}", world_rank, info);
+                logger->error(
+                    "[id: {0}, step: {1}, it: {2}] LAPACKE_zgtsv failed, info = {3}", 
+                    config_index,
+                    step,
+                    iteration,
+                    info
+                );
                 return info;
             }
+
+            enforce_boundary();
 
             auto [ converged, norm ] = check_convergance(step, iteration);
             log_convergance_info(converged, norm, step, iteration);
@@ -190,8 +209,8 @@ struct schrodinger_solver_t
         if (converged)
         {
             logger->debug(
-                "rank = {0}, step = {1}, iteration = {2}, norm = {3} converged", 
-                world_rank, step, iteration, norm
+                "[id: {0}, step: {1}, it: {2}] norm = {3}, converged", 
+                config_index, step, iteration, norm
             );
             return;
         }
@@ -199,15 +218,15 @@ struct schrodinger_solver_t
         if (iteration == config.max_iterations - 1)
         {
             logger->warn(
-                "rank = {0}, step = {1}, iteration = {2}, norm = {3} max iterations reached", 
-                world_rank, step, iteration, norm
+                "[id: {0}, step: {1}, it: {2}] norm = {3}, max iterations reached", 
+                config_index, step, iteration, norm
             );
             return;
         }
 
         logger->debug(
-            "rank = {0}, step = {1}, iteration = {2}, norm = {3}", 
-            world_rank, step, iteration, norm
+            "[id: {0}, step: {1}, it: {2}] norm = {3}", 
+            config_index, step, iteration, norm
         );
     }
 

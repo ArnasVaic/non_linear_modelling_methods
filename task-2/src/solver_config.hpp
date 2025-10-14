@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cereal/types/complex.hpp>
+#include <cereal/archives/json.hpp>
 
 struct solver_config_t
 {
@@ -35,9 +35,9 @@ struct solver_config_t
     size_t total_time_steps;
 
     template<class Archive>
-    void load(Archive& ar) {
-        ar(
-            max_iterations, 
+    void load(Archive& archive) {
+        archive(
+            max_iterations,
             delta,
             N,
             beta,
@@ -48,6 +48,18 @@ struct solver_config_t
         total_points = N + 1;
         h = 1.0 / N;
         h2 = h * h;
-        total_time_steps = static_cast<int>(T / tau);
+        total_time_steps = static_cast<size_t>(T / tau);
+    }
+
+    template<class Archive>
+    void save(Archive& archive) const {
+        archive(
+            CEREAL_NVP(max_iterations), 
+            CEREAL_NVP(delta),
+            CEREAL_NVP(N),
+            CEREAL_NVP(beta),
+            CEREAL_NVP(T),
+            CEREAL_NVP(tau)
+        );
     }
 };

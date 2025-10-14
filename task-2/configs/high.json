@@ -1,8 +1,10 @@
 {
-    "max_iterations": 100,
-    "delta": 1e-5,
-    "N": 499,
-    "beta": 1.0,
-    "T": 10.0,
-    "tau": 0.01
+    "solver_config": {
+        "max_iterations": 100,
+        "delta": 1e-5,
+        "N": 999,
+        "beta": 1.0,
+        "T": 10.0,
+        "tau": 0.01
+    }
 }
