@@ -2,7 +2,7 @@
     "solver_config": {
         "max_iterations": 100,
         "delta": 1e-5,
-        "N": 999,
+        "N": 1599,
         "beta": 1.0,
         "T": 10.0,
         "tau": 0.0025
